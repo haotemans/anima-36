@@ -4,7 +4,7 @@ model:
   hidden_size: 2048
   num_heads: 16
   head_dim: 128
-  latent_channels: null  # Verify against exact Qwen-Image-2.1 VAE config.
+  latent_channels: null
   patch_size: 2
 
 attention:
@@ -12,7 +12,7 @@ attention:
   ls_linear_blocks: 27
   standard_blocks: 9
   qk_rms_norm: true
-  rope: false  # Not yet implemented; must be added before DS parity claims.
+  rope: false  # TODO: implement before model-weight parity.
 
 lsconv:
   implementation: "portable_pytorch_lkp_ska_reference"
@@ -22,7 +22,8 @@ lsconv:
 
 ffn:
   type: swiglu
-  hidden_size: 8192  # Initial value; benchmark and verify.
+  hidden_size: 8192
+  fused_gate_up_projection: true
 
 normalization:
   type: rmsnorm
@@ -32,7 +33,7 @@ normalization:
 attnres:
   enabled: true
   grouping: 4
-  equation: "softmax learned weights over last 4 normalized states, projected and gated into residual"
+  equation: "softmax learned weights over recent normalized states, projected and gated"
 
 text:
   model_id: "Qwen/Qwen3.5-4B"
@@ -53,5 +54,8 @@ vae:
   shift_factor: null
 
 training:
-  gradient_checkpointing: false  # Not wired into the prototype yet.
+  gradient_checkpointing: true
   mixed_precision: "bf16"
+  torch_compile: "optional"
+  fused_adamw: "cuda_when_supported"
+  allow_tf32: true
