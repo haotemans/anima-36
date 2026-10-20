@@ -129,3 +129,12 @@ This describes the current code path, not the full diffusion system. Text encodi
 ### Current conclusion
 
 The repository has a runnable small-shape transformer scaffold, but **the target architecture is not yet fully specified or validated as a diffusion model**. The highest-priority blockers are the unresolved target (upstream-compatible vs new architecture), missing positional encoding, disconnected layerwise text routing, undefined latent/text contracts, and missing training/sampling objective. Kernel optimization should wait until these are resolved.
+
+
+## Position encoding implementation (2026-10)
+
+- Standard self-attention applies axial 2D RoPE to Q/K using the patch grid passed by the core model. The head dimension must be divisible by four.
+- LS-Linear uses deterministic 2D sinusoidal absolute embeddings on token features before Q/K/V projection. RoPE is intentionally not applied to its positive ELU+1 kernel features, because arbitrary rotations would break the nonnegative feature-map formulation.
+- Text cross-attention remains without image-side RoPE in this first implementation.
+- This is a custom architecture choice, not checkpoint parity with upstream Anima. Weights trained without these encodings are not expected to be behaviorally compatible without retraining or explicit validation.
+- Unit tests cover shape, finite values, gradients, and mismatched grid sizes. Run the full CPU suite and accelerator tests before treating this as validated; unit tests do not establish end-to-end image quality.
