@@ -12,7 +12,8 @@ attention:
   ls_linear_blocks: 27
   standard_blocks: 9
   qk_rms_norm: true
-  rope: false  # TODO: implement before model-weight parity.
+  rope: true  # Axial 2D RoPE is active in standard self-attention.
+  ls_linear_position: "2d_sincos_input"  # Preserve positive-feature kernel formulation.
 
 lsconv:
   implementation: "portable_pytorch_lkp_ska_reference"
