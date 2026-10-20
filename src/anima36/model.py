@@ -58,8 +58,12 @@ class Anima36Core(nn.Module):
         prior_states = []
         for block in self.blocks:
             if self.training and self.gradient_checkpointing and torch.is_grad_enabled():
+                # Snapshot only the recent states consumed by BlockAttnRes. Passing
+                # the growing mutable list into checkpoint can make backward
+                # recomputation observe later blocks' states.
+                prior_snapshot = tuple(prior_states[-block.attnres.max_sources:])
                 x = checkpoint(block, x, time_cond, text_context, text_mask,
-                               (gh, gw), prior_states, use_reentrant=False)
+                               (gh, gw), prior_snapshot, use_reentrant=False)
             else:
                 x = block(x, time_cond, text_context, text_mask, (gh, gw), prior_states)
             prior_states.append(x)
