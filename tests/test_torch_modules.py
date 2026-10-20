@@ -41,7 +41,7 @@ def test_attnres_and_swiglu():
 def test_layerwise_text_projector():
     projector = LayerwiseTextProjector(24, 32)
     features = {key: torch.randn(2, 7, 24) for key in ("shallow", "middle", "deep")}
-    assert all(value.shape == (2, 7, 32) for value in projector(features).items())
+    assert all(value.shape == (2, 7, 32) for value in projector(features).values())
     assert stage_features_for_block(0) == ("middle", "deep")
     assert stage_features_for_block(12) == ("shallow", "middle", "deep")
     assert stage_features_for_block(35) == ("shallow", "deep")
