@@ -1,7 +1,8 @@
-"""Small, configurable PyTorch Anima-36 core; not yet a DS pipeline replacement."""
+"""Configurable PyTorch Anima-36 core; not yet a DS pipeline replacement."""
 import math
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from .block import Anima36Block
 from .schedule import build_attention_schedule
 
@@ -19,12 +20,12 @@ class Anima36Core(nn.Module):
     """Latent-in/latent-out transformer with 2x patching and text cross-attention.
 
     Defaults express the intended large configuration and require substantial accelerator
-    memory. Use small dimensions for unit tests. VAE conventions and pipeline integration
-    remain external responsibilities.
+    memory. VAE conventions and pipeline integration remain external responsibilities.
     """
     def __init__(self, latent_channels: int = 16, dim: int = 2048,
                  depth: int = 36, num_heads: int = 16, context_dim: int = 2048,
-                 patch_size: int = 2, ffn_dim: int | None = None, kv_stride: int = 2):
+                 patch_size: int = 2, ffn_dim: int | None = None, kv_stride: int = 2,
+                 gradient_checkpointing: bool = False):
         super().__init__()
         if depth % 4:
             raise ValueError("depth must be a positive multiple of four")
@@ -32,6 +33,7 @@ class Anima36Core(nn.Module):
             raise ValueError("dim must be divisible by num_heads")
         self.latent_channels, self.dim, self.depth = latent_channels, dim, depth
         self.patch_size = patch_size
+        self.gradient_checkpointing = gradient_checkpointing
         self.schedule = build_attention_schedule(depth)
         self.patch_embed = nn.Conv2d(latent_channels, dim, kernel_size=patch_size, stride=patch_size)
         self.time_mlp = nn.Sequential(nn.Linear(dim, dim * 4), nn.SiLU(), nn.Linear(dim * 4, dim))
@@ -55,7 +57,11 @@ class Anima36Core(nn.Module):
         time_cond = self.time_mlp(timestep_embedding(timesteps, self.dim).to(latents.dtype))
         prior_states = []
         for block in self.blocks:
-            x = block(x, time_cond, text_context, text_mask, (gh, gw), prior_states)
+            if self.training and self.gradient_checkpointing and torch.is_grad_enabled():
+                x = checkpoint(block, x, time_cond, text_context, text_mask,
+                               (gh, gw), prior_states, use_reentrant=False)
+            else:
+                x = block(x, time_cond, text_context, text_mask, (gh, gw), prior_states)
             prior_states.append(x)
         shift, scale = self.final_modulation(time_cond).chunk(2, dim=-1)
         x = self.final_norm(x) * (1 + scale[:, None, :]) + shift[:, None, :]
