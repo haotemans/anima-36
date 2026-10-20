@@ -2,6 +2,28 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+except ImportError:  # Compatibility with older supported PyTorch builds.
+    SDPBackend = None
+    sdpa_kernel = None
+
+
+def _scaled_dot_product_attention(q, k, v, attn_mask=None):
+    """Prefer FlashAttention, while retaining compatible SDPA fallbacks.
+
+    PyTorch dispatches to FlashAttention only when device, dtype, shape, and
+    mask constraints permit it; otherwise efficient attention or math is used.
+    """
+    if sdpa_kernel is None or SDPBackend is None:
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+    with sdpa_kernel([
+        SDPBackend.FLASH_ATTENTION,
+        SDPBackend.EFFICIENT_ATTENTION,
+        SDPBackend.MATH,
+    ]):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
 from .lsconv import LSConv
 from .norm import RMSNorm
 
@@ -66,8 +88,8 @@ class StandardSelfAttention(nn.Module):
         b, n, d = x.shape
         q, k, v = self.qkv(x).reshape(b, n, 3, self.num_heads, self.head_dim).unbind(dim=2)
         q, k = self.q_norm(q), self.k_norm(k)
-        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
-                                           v.transpose(1, 2))
+        y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
+                                      v.transpose(1, 2))
         return self.out(y.transpose(1, 2).reshape(b, n, d))
 
 class TextCrossAttention(nn.Module):
@@ -95,6 +117,6 @@ class TextCrossAttention(nn.Module):
             if context_mask.shape != (b, m):
                 raise ValueError("context_mask must have shape [batch, text_tokens]")
             mask = context_mask[:, None, None, :].to(torch.bool)
-        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
-                                           v.transpose(1, 2), attn_mask=mask)
+        y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
+                                      v.transpose(1, 2), attn_mask=mask)
         return self.out(y.transpose(1, 2).reshape(b, n, d))
