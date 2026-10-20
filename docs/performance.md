@@ -36,7 +36,7 @@ AttnRes normalizes the recent source states, stacks them, and reduces them in on
 
 ## 6. Current likely bottleneck: LSConv
 
-The portable reference LSConv uses `unfold`, which materializes local patches and can consume substantial memory at high resolutions. It is intended as a correctness/reference implementation, not the final high-throughput kernel. The next optimization should replace Small Kernel Aggregation with a fused Triton/CUDA kernel and compare output and gradients to this reference across shapes and dtypes. Do not make that optional dependency mandatory for CPU CI.
+The portable reference LSConv uses `unfold`, which materializes local patches and can consume substantial memory at high resolutions. When Triton is installed and the input is CUDA FP16/BF16/FP32, `SmallKernelAggregation` now dispatches to an optional fused Triton implementation; CPU, unsupported dtypes, and environments without Triton retain the PyTorch reference path. A CUDA-only parity test compares outputs and gradients against the reference. Triton remains optional, and this path is not yet claimed faster: validate kernel compilation, numerical parity, throughput, and peak memory on the target GPU before relying on it.
 
 ## Benchmark checklist
 
