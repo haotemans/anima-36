@@ -12,13 +12,13 @@ attention:
   ls_linear_blocks: 27
   standard_blocks: 9
   qk_rms_norm: true
-  rope: true
+  rope: false  # Not yet implemented; must be added before DS parity claims.
 
 lsconv:
-  implementation: "port_from_official_thu_mig_lsnet"
-  large_kernel_size: null
-  small_kernel_size: null
-  groups: null
+  implementation: "portable_pytorch_lkp_ska_reference"
+  large_kernel_size: 7
+  small_kernel_size: 3
+  groups: 8
 
 ffn:
   type: swiglu
@@ -32,7 +32,7 @@ normalization:
 attnres:
   enabled: true
   grouping: 4
-  equation: null  # Must be specified and tested before implementation.
+  equation: "softmax learned weights over last 4 normalized states, projected and gated into residual"
 
 text:
   model_id: "Qwen/Qwen3.5-4B"
@@ -53,5 +53,5 @@ vae:
   shift_factor: null
 
 training:
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # Not wired into the prototype yet.
   mixed_precision: "bf16"
