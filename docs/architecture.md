@@ -63,3 +63,69 @@ Inspect the exact target revision of `diffsynth/models/anima_dit.py`, `diffsynth
 - VAE latent convention tests.
 - Explicit checkpoint mismatch report.
 - End-to-end pipeline test before claiming inference support.
+
+
+## Feasibility audit (2026-10)
+
+### Important target distinction
+
+There are two different goals and they must not be conflated:
+
+1. **DiffSynth-Studio Anima compatibility.** The current upstream `diffsynth/models/anima_dit.py` implementation defines `AnimaDiT` with 28 transformer blocks, 16 input/output latent channels, spatial patch size 2, model width 2048, 16 heads, cross-attention context width 1024, 3D RoPE, AdaLN-LoRA, and an LLMAdapter. Its current `AnimaImagePipeline` uses a `ZImageTextEncoder`, a separate T5 tokenizer/IDs path, and `WanVideoVAE`. The upstream pipeline uses a FlowMatch scheduler and predicts a denoising/flow target.
+2. **A new Anima-inspired 36-block model.** This repository's 36-block schedule, LS-Linear layers, Block AttnRes prototype, Qwen3.5-4B target, and Qwen-Image-2.1 VAE target are a distinct proposed architecture. They are not drop-in compatible with upstream Anima weights or pipeline unless an explicit conversion/adaptation is designed and validated.
+
+Upstream references (verify against a pinned commit before implementation):
+- https://github.com/modelscope/DiffSynth-Studio/blob/main/diffsynth/models/anima_dit.py
+- https://github.com/modelscope/DiffSynth-Studio/blob/main/diffsynth/pipelines/anima_image.py
+- https://github.com/modelscope/DiffSynth-Studio/blob/main/examples/anima/model_training/train.py
+
+### Dataflow implemented by this repository
+
+1. Input latents `[B, C_latent, H, W]` enter a stride-`patch_size` Conv2d and become `[B, N, D]`, where `N=(H/patch_size)(W/patch_size)`.
+2. A scalar timestep per batch item is converted to a sinusoidal embedding and projected to `[B,D]`.
+3. Each block applies timestep-modulated image self-attention, separate text cross-attention, an unmodulated pre-norm SwiGLU FFN, and learned aggregation from recent block outputs.
+4. Final timestep modulation and a transposed convolution map tokens back to `[B,C_latent,H,W]`.
+
+This describes the current code path, not the full diffusion system. Text encoding/tokenization, VAE encode/decode and latent scaling, noise/sigma schedule, target parameterization, loss, classifier-free guidance, sampler, checkpoint conversion, and an end-to-end pipeline are not implemented here.
+
+### Blocking feasibility issues
+
+- **Text routing is not connected.** `LayerwiseTextProjector` and `stage_features_for_block` are standalone utilities. `Anima36Core.forward` accepts one `text_context` tensor and passes the same context to every block; it does not select shallow/middle/deep hidden states per block. The current staged-routing claim is therefore a design intention, not implemented behavior.
+- **Position information is missing.** The config explicitly sets `rope: false`, and neither standard attention nor LS-Linear attention applies RoPE or another explicit spatial position embedding. LSConv provides local inductive bias but does not replace a complete positional encoding contract for global attention. This is a blocker for target-model parity and a major risk for spatial composition.
+- **LS-Linear positional semantics are undefined.** K/V are average-pooled spatially, then used in positive-feature linear attention. The code does not define a positional encoding treatment for compressed K or demonstrate that this operator preserves the required spatial relationships.
+- **Conditioning is inconsistent across sublayers.** Self-attention and text cross-attention receive timestep modulation; the FFN only receives RMSNorm and has no timestep modulation. This may be a valid custom design, but it differs from the stated target block contract and needs an explicit decision.
+- **Latent contract is unknown.** The config leaves latent channels, spatial scale, scaling factor, and shift factor null. The model defaults to 16 channels, but a default is not proof that the selected VAE emits compatible latents.
+- **Text encoder contract is unknown.** The code assumes one `context_dim` and one mask. Qwen3.5-4B hidden-state indices, feature dimensions, tokenizer behavior, model output API, and license have not been verified; a separate T5 path in upstream Anima is not represented.
+- **Training objective and sampler are absent.** Without a specified noise/sigma schedule, prediction target (epsilon, velocity, or flow), loss weighting, and matching sampler, a forward pass alone cannot establish diffusion-model feasibility.
+- **Checkpoint compatibility is not established.** The 36-vs-28 depth, attention operators, positional encoding, FFN, normalization, conditioning, and text adapter differ from upstream. Weight loading requires an explicit mapping and mismatch report; shape-compatible loading alone is insufficient.
+- **AttnRes is a prototype.** Its learned source weights are shared across tokens and use recent states; this is not validated as equivalent to the intended reference mechanism. The implementation also retains a growing list of all block outputs, so activation-memory impact must be measured.
+- **LSConv equivalence is unverified.** The local implementation's padding, normalization, weight layout and group sharing must be checked against the exact official LSNet implementation. The optional Triton path needs actual CUDA compilation and forward/backward parity before being treated as usable.
+
+### Recommended acceptance gates
+
+**Gate A — architecture specification (before performance tuning)**
+- Choose whether the goal is upstream checkpoint/pipeline compatibility or a new 36-block model.
+- Pin exact upstream revisions and model IDs.
+- Specify tensor shapes, spatial position encoding, timestep modulation, text features/masks, latent scaling, prediction target, and scheduler/loss.
+- Resolve the latent channel and text-context dimensions from actual model configs, not assumptions.
+
+**Gate B — tiny mathematical prototype**
+- Test multiple non-square grids, patch sizes, batches, and dtypes.
+- Add positional encoding and test translation/spatial sensitivity.
+- Test text padding invariance and prove staged hidden-state routing actually changes the per-block context.
+- Compare checkpointed/eager outputs and all parameter gradients.
+- Check finite outputs/gradients under BF16 and FP32.
+
+**Gate C — reference parity**
+- Compare LSConv output and gradients with the pinned official LSNet kernel.
+- Compare VAE encode/decode latent conventions and text encoder outputs with the selected upstream components.
+- Load a checkpoint with a complete missing/unexpected/shape-mismatch report.
+
+**Gate D — end-to-end diffusion**
+- Implement training data flow, noise/sigma scheduler, prediction parameterization, loss, sampler, and decode.
+- Overfit a tiny dataset or synthetic batch as a basic learnability check before scaling.
+- Only after these gates pass should performance benchmarking be treated as meaningful.
+
+### Current conclusion
+
+The repository has a runnable small-shape transformer scaffold, but **the target architecture is not yet fully specified or validated as a diffusion model**. The highest-priority blockers are the unresolved target (upstream-compatible vs new architecture), missing positional encoding, disconnected layerwise text routing, undefined latent/text contracts, and missing training/sampling objective. Kernel optimization should wait until these are resolved.
