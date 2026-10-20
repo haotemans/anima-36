@@ -26,6 +26,7 @@ def _scaled_dot_product_attention(q, k, v, attn_mask=None):
         return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
 from .lsconv import LSConv
 from .norm import RMSNorm
+from .positional import apply_axial_2d_rope, sinusoidal_2d_embedding
 
 class LSLinearAttention(nn.Module):
     """Full-resolution Q, spatially pooled K/V, positive-feature linear attention."""
@@ -51,6 +52,11 @@ class LSLinearAttention(nn.Module):
         image = x.transpose(1, 2).reshape(b, d, h, w)
         image = self.local(image)
         tokens = image.flatten(2).transpose(1, 2)
+        # Positive-feature linear attention cannot safely rotate the mapped Q/K
+        # features. Inject deterministic 2D coordinates before their projections.
+        tokens = tokens + sinusoidal_2d_embedding(
+            grid_size, d, tokens.device, tokens.dtype
+        )
         q, k, v = self.qkv(tokens).chunk(3, dim=-1)
         q = q.reshape(b, n, self.num_heads, self.head_dim)
         k = k.reshape(b, n, self.num_heads, self.head_dim)
@@ -84,10 +90,13 @@ class StandardSelfAttention(nn.Module):
         self.q_norm, self.k_norm = RMSNorm(self.head_dim), RMSNorm(self.head_dim)
         self.out = nn.Linear(dim, dim)
 
-    def forward(self, x: torch.Tensor, grid_size=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, grid_size: tuple[int, int] | None = None) -> torch.Tensor:
         b, n, d = x.shape
+        if grid_size is None:
+            raise ValueError("grid_size is required when 2D RoPE is enabled")
         q, k, v = self.qkv(x).reshape(b, n, 3, self.num_heads, self.head_dim).unbind(dim=2)
         q, k = self.q_norm(q), self.k_norm(k)
+        q, k = apply_axial_2d_rope(q, k, grid_size)
         y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
                                       v.transpose(1, 2))
         return self.out(y.transpose(1, 2).reshape(b, n, d))
