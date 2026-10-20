@@ -3,6 +3,7 @@ from anima36.attnres import BlockAttnRes
 from anima36.attention import LSLinearAttention, StandardSelfAttention, TextCrossAttention
 from anima36.ffn import SwiGLU
 from anima36.lsconv import LSConv
+from anima36.ska_triton import triton_ska, triton_ska_available
 from anima36.model import Anima36Core
 from anima36.optim import make_adamw
 from anima36.text_conditioning import LayerwiseTextProjector, stage_features_for_block
@@ -89,3 +90,28 @@ def test_checkpointing_matches_eager_gradients():
         if p1.grad is not None or p2.grad is not None:
             assert p1.grad is not None and p2.grad is not None
             torch.testing.assert_close(p1.grad, p2.grad, rtol=1e-4, atol=1e-5)
+
+def test_triton_ska_matches_reference_when_available():
+    if not torch.cuda.is_available() or not triton_ska_available():
+        return
+    from torch.nn import functional as F
+    torch.manual_seed(11)
+    device = "cuda"
+    groups, channels, kernel = 4, 8, 3
+    x_ref = torch.randn(2, channels, 7, 9, device=device, requires_grad=True)
+    w_ref = torch.randn(2, channels // groups, kernel * kernel, 7, 9,
+                        device=device, requires_grad=True)
+    x_tri = x_ref.detach().clone().requires_grad_(True)
+    w_tri = w_ref.detach().clone().requires_grad_(True)
+
+    patches = F.unfold(x_ref, kernel_size=kernel, padding=kernel // 2)
+    patches = patches.reshape(2, groups, channels // groups, kernel * kernel, 7, 9)
+    expected = (patches * w_ref.unsqueeze(1)).sum(dim=3).reshape_as(x_ref)
+    actual = triton_ska(x_tri, w_tri, groups, kernel)
+    torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-4)
+
+    grad = torch.randn_like(expected)
+    expected.backward(grad)
+    actual.backward(grad)
+    torch.testing.assert_close(x_tri.grad, x_ref.grad, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(w_tri.grad, w_ref.grad, rtol=1e-4, atol=1e-4)
