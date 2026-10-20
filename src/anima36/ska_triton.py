@@ -53,18 +53,18 @@ if triton is not None:
         b = i // (WW * H * C)
         pg = C // G
         p = c % pg
-        go = tl.load(GRAD + i, mask, 0).to(tl.float32)
+        acc = tl.full((BLOCK,), 0, tl.float32)
         for ky in range(K):
             oy = yy - (ky - K // 2)
             for kx in range(K):
                 ox = xx - (kx - K // 2)
                 inside = mask & (oy >= 0) & (oy < H) & (ox >= 0) & (ox < WW)
+                gi = ((b * C + c) * H + oy) * WW + ox
                 wi = (((b * pg + p) * (K * K) + ky * K + kx) * H + oy) * WW + ox
+                gv = tl.load(GRAD + gi, inside, 0).to(tl.float32)
                 wv = tl.load(W + wi, inside, 0).to(tl.float32)
-                tl.atomic_add(DX + i, 0.0, mask)  # keep DX pointer type specialization stable
-                # Each input receives contributions from output positions around it.
-                tl.atomic_add(DX + ((b * C + c) * H + oy) * WW + ox,
-                              go * wv, inside, sem="relaxed")
+                acc += gv * wv
+        tl.store(DX + i, acc, mask)
 
     @triton.jit
     def _ska_dw(X, GRAD, DW, C: tl.constexpr, H: tl.constexpr, WW: tl.constexpr,
@@ -74,27 +74,17 @@ if triton is not None:
         mask = i < N
         xx = i % WW
         yy = (i // WW) % H
-        q = i // (WW * H)
-        p = q % (C // G)
-        b = q // (C // G)
+        q = i // (H * WW)
+        koff = q % (K * K)
+        p = (q // (K * K)) % (C // G)
+        b = q // ((C // G) * (K * K))
         pg = C // G
-        total = tl.full((BLOCK,), 0, tl.float32)
-        for ky in range(K):
-            iy = yy + ky - K // 2
-            for kx in range(K):
-                ix = xx + kx - K // 2
-                inside = mask & (iy >= 0) & (iy < H) & (ix >= 0) & (ix < WW)
-                # Only the selected kernel offset contributes to this weight.
-                # The reduction across channel groups shares each predicted weight.
-                pass
-        # Weight layout is [B, C/G, K*K, H, W]. Decode offset from flattened index.
-        # This kernel uses one program element per weight and sums across groups.
-        koff = (i // (H * WW)) % (K * K)
         ky = koff // K
         kx = koff % K
         iy = yy + ky - K // 2
         ix = xx + kx - K // 2
         inside = mask & (iy >= 0) & (iy < H) & (ix >= 0) & (ix < WW)
+        total = tl.full((BLOCK,), 0, tl.float32)
         for group in range(G):
             c = group * pg + p
             xi = ((b * C + c) * H + iy) * WW + ix
