@@ -63,3 +63,29 @@ def test_adamw_helper_cpu():
     loss = model(torch.randn(2, 4)).square().mean()
     loss.backward()
     optimizer.step()
+
+def test_checkpointing_matches_eager_gradients():
+    torch.manual_seed(7)
+    eager = Anima36Core(latent_channels=4, dim=32, depth=4, num_heads=4,
+                        context_dim=24, patch_size=2, ffn_dim=64, kv_stride=2,
+                        gradient_checkpointing=False)
+    checked = Anima36Core(latent_channels=4, dim=32, depth=4, num_heads=4,
+                          context_dim=24, patch_size=2, ffn_dim=64, kv_stride=2,
+                          gradient_checkpointing=True)
+    checked.load_state_dict(eager.state_dict())
+    eager.train()
+    checked.train()
+    x1 = torch.randn(1, 4, 8, 8, requires_grad=True)
+    x2 = x1.detach().clone().requires_grad_(True)
+    text = torch.randn(1, 6, 24)
+    timestep = torch.tensor([12.])
+    y1 = eager(x1, timestep, text)
+    y2 = checked(x2, timestep, text)
+    torch.testing.assert_close(y1, y2, rtol=1e-5, atol=1e-5)
+    y1.square().mean().backward()
+    y2.square().mean().backward()
+    torch.testing.assert_close(x1.grad, x2.grad, rtol=1e-4, atol=1e-5)
+    for p1, p2 in zip(eager.parameters(), checked.parameters()):
+        if p1.grad is not None or p2.grad is not None:
+            assert p1.grad is not None and p2.grad is not None
+            torch.testing.assert_close(p1.grad, p2.grad, rtol=1e-4, atol=1e-5)
