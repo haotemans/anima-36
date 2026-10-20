@@ -8,6 +8,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from anima36.ska_triton import triton_ska, triton_ska_available
+
 class ConvBN(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size=1, padding=0, groups=1):
         super().__init__(
@@ -55,6 +57,12 @@ class SmallKernelAggregation(nn.Module):
         per_group = c // groups
         if weights.shape != (b, per_group, k * k, h, w):
             raise ValueError(f"unexpected dynamic weight shape: {tuple(weights.shape)}")
+        if weights.device != x.device:
+            raise ValueError("input and dynamic weights must be on the same device")
+        if (x.is_cuda and triton_ska_available()
+                and x.dtype in (torch.float16, torch.bfloat16, torch.float32)
+                and weights.dtype == x.dtype):
+            return triton_ska(x, weights, groups, k)
         patches = F.unfold(x, kernel_size=k, padding=k // 2)
         patches = patches.reshape(b, groups, per_group, k * k, h, w)
         out = (patches * weights.unsqueeze(1)).sum(dim=3)
