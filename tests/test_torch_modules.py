@@ -4,6 +4,7 @@ from anima36.attention import LSLinearAttention, StandardSelfAttention, TextCros
 from anima36.ffn import SwiGLU
 from anima36.lsconv import LSConv
 from anima36.model import Anima36Core
+from anima36.optim import make_adamw
 from anima36.text_conditioning import LayerwiseTextProjector, stage_features_for_block
 
 def test_lsconv_forward_backward():
@@ -33,22 +34,32 @@ def test_cross_attention_mask_and_shape():
 def test_attnres_and_swiglu():
     x = torch.randn(2, 5, 32)
     assert BlockAttnRes(32, 4)(x, [x, x]).shape == x.shape
-    assert SwiGLU(32, 64)(x).shape == x.shape
+    ffn = SwiGLU(32, 64)
+    assert ffn(x).shape == x.shape
+    assert ffn.gate_up_proj.out_features == 128
 
 def test_layerwise_text_projector():
     projector = LayerwiseTextProjector(24, 32)
     features = {key: torch.randn(2, 7, 24) for key in ("shallow", "middle", "deep")}
-    assert all(value.shape == (2, 7, 32) for value in projector(features).values())
+    assert all(value.shape == (2, 7, 32) for value in projector(features).items())
     assert stage_features_for_block(0) == ("middle", "deep")
     assert stage_features_for_block(12) == ("shallow", "middle", "deep")
     assert stage_features_for_block(35) == ("shallow", "deep")
 
 def test_small_full_model_forward_backward():
     model = Anima36Core(latent_channels=4, dim=32, depth=4, num_heads=4,
-                        context_dim=24, patch_size=2, ffn_dim=64, kv_stride=2)
+                        context_dim=24, patch_size=2, ffn_dim=64, kv_stride=2,
+                        gradient_checkpointing=True)
     latents = torch.randn(2, 4, 8, 8, requires_grad=True)
     text = torch.randn(2, 6, 24)
     out = model(latents, torch.tensor([10., 20.]), text)
     assert out.shape == latents.shape and torch.isfinite(out).all()
     out.mean().backward()
     assert latents.grad is not None and torch.isfinite(latents.grad).all()
+
+def test_adamw_helper_cpu():
+    model = torch.nn.Linear(4, 3)
+    optimizer = make_adamw(model.parameters(), lr=1e-3, fused=None)
+    loss = model(torch.randn(2, 4)).square().mean()
+    loss.backward()
+    optimizer.step()
