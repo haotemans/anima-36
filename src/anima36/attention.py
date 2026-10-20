@@ -27,7 +27,7 @@ class LSLinearAttention(nn.Module):
         if h * w != n or d != self.dim:
             raise ValueError("grid_size must match token count and configured dim")
         image = x.transpose(1, 2).reshape(b, d, h, w)
-        image = image + self.local(image)
+        image = self.local(image)
         tokens = image.flatten(2).transpose(1, 2)
         q, k, v = self.qkv(tokens).chunk(3, dim=-1)
         q = q.reshape(b, n, self.num_heads, self.head_dim)
