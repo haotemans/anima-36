@@ -8,7 +8,7 @@ These are opt-in performance paths, not measured speedup claims. Benchmark on th
 
 ## 2. SDPA attention
 
-The standard self-attention and text cross-attention call `torch.nn.functional.scaled_dot_product_attention`. PyTorch selects a compatible SDPA backend (Flash Attention, memory-efficient, or math) based on hardware, dtype, mask and shape. The LS-Linear kernel is a different linear-attention equation and does not use SDPA.
+The standard self-attention and text cross-attention call `torch.nn.functional.scaled_dot_product_attention` through an SDPA backend context that prioritizes FlashAttention, then memory-efficient attention, then the math implementation. FlashAttention is used only when the device, dtype, mask and tensor shape are supported; otherwise PyTorch falls back to a compatible backend. This preference applies to standard self-attention and text cross-attention. The LS-Linear kernel is a different linear-attention equation and does not use SDPA.
 
 ## 3. Activation checkpointing
 
