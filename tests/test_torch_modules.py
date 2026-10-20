@@ -5,6 +5,7 @@ from anima36.ffn import SwiGLU
 from anima36.lsconv import LSConv
 from anima36.ska_triton import triton_ska, triton_ska_available
 from anima36.model import Anima36Core
+from anima36.positional import apply_axial_2d_rope, sinusoidal_2d_embedding
 from anima36.optim import make_adamw
 from anima36.text_conditioning import LayerwiseTextProjector, stage_features_for_block
 
@@ -21,9 +22,32 @@ def test_attention_shapes_and_gradients():
     linear = LSLinearAttention(32, num_heads=4, kv_stride=2)
     standard = StandardSelfAttention(32, num_heads=4)
     assert linear(x, (4, 4)).shape == x.shape
-    assert standard(x).shape == x.shape
+    assert standard(x, (4, 4)).shape == x.shape
     (linear(x, (4, 4)).mean() + standard(x).mean()).backward()
     assert x.grad is not None
+
+
+def test_2d_position_encodings_shapes_and_gradients():
+    q = torch.randn(2, 15, 4, 8, requires_grad=True)
+    k = torch.randn(2, 15, 4, 8, requires_grad=True)
+    q_rot, k_rot = apply_axial_2d_rope(q, k, (3, 5))
+    assert q_rot.shape == q.shape and k_rot.shape == k.shape
+    assert torch.isfinite(q_rot).all() and torch.isfinite(k_rot).all()
+    embedding = sinusoidal_2d_embedding((3, 5), 32, q.device, q.dtype)
+    assert embedding.shape == (1, 15, 32)
+    (q_rot.square().mean() + k_rot.square().mean()).backward()
+    assert q.grad is not None and k.grad is not None
+
+
+def test_2d_rope_rejects_mismatched_grid():
+    module = StandardSelfAttention(32, num_heads=4)
+    x = torch.randn(1, 15, 32)
+    try:
+        module(x, (4, 4))
+    except ValueError as exc:
+        assert "grid_size" in str(exc)
+    else:
+        raise AssertionError("expected mismatched grid to raise ValueError")
 
 def test_cross_attention_mask_and_shape():
     x = torch.randn(2, 16, 32)
