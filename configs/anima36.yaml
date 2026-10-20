@@ -1,0 +1,57 @@
+model:
+  name: anima36
+  depth: 36
+  hidden_size: 2048
+  num_heads: 16
+  head_dim: 128
+  latent_channels: null  # Verify against exact Qwen-Image-2.1 VAE config.
+  patch_size: 2
+
+attention:
+  schedule: "3_ls_linear_then_1_standard"
+  ls_linear_blocks: 27
+  standard_blocks: 9
+  qk_rms_norm: true
+  rope: true
+
+lsconv:
+  implementation: "port_from_official_thu_mig_lsnet"
+  large_kernel_size: null
+  small_kernel_size: null
+  groups: null
+
+ffn:
+  type: swiglu
+  hidden_size: 8192  # Initial value; benchmark and verify.
+
+normalization:
+  type: rmsnorm
+  pre_norm: true
+  preserve_timestep_adaln: true
+
+attnres:
+  enabled: true
+  grouping: 4
+  equation: null  # Must be specified and tested before implementation.
+
+text:
+  model_id: "Qwen/Qwen3.5-4B"
+  remove_legacy_llm_adapter: true
+  selected_hidden_layers: null
+  staged_injection:
+    blocks_1_12: ["middle", "deep"]
+    blocks_13_24: ["shallow", "middle", "deep"]
+    blocks_25_36: ["shallow", "deep"]
+  fusion: "dedicated_cross_attention"
+  projection_dim: 2048
+
+vae:
+  model_id: "Qwen-Image-2.1"
+  latent_channels: null
+  spatial_scale: null
+  scaling_factor: null
+  shift_factor: null
+
+training:
+  gradient_checkpointing: true
+  mixed_precision: "bf16"
