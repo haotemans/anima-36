@@ -10,9 +10,9 @@ These are opt-in performance paths, not measured speedup claims. Benchmark on th
 
 The standard self-attention and text cross-attention call `torch.nn.functional.scaled_dot_product_attention` through an SDPA backend context that prioritizes FlashAttention, then memory-efficient attention, then the math implementation. FlashAttention is used only when the device, dtype, mask and tensor shape are supported; otherwise PyTorch falls back to a compatible backend. This preference applies to standard self-attention and text cross-attention. The LS-Linear kernel is a different linear-attention equation and does not use SDPA.
 
-## 3. Activation checkpointing
+## 3. Activation checkpointing and recomputation correctness
 
-Set `gradient_checkpointing=True` on `Anima36Core` during training to recompute block activations during backward and reduce activation memory. It can increase step time. It is disabled by default in the Python constructor; enable it deliberately after validating memory/throughput trade-offs.
+Set `gradient_checkpointing=True` on `Anima36Core` during training to recompute block activations during backward and reduce activation memory. It can increase step time. The checkpoint path snapshots only the recent AttnRes source states before each block; do not pass the growing mutable history list into recomputation. A regression test compares eager and checkpointed outputs and gradients. It is disabled by default in the Python constructor; enable it deliberately after validating memory/throughput trade-offs.
 
 ## 4. Fused AdamW, TF32 and torch.compile
 
@@ -30,7 +30,11 @@ model = compile_model(model, mode="default", dynamic=False)
 
 For BF16, use autocast in the training loop only after validating the target GPU and all operations. Keep loss accumulation / sensitive reductions in FP32 where needed. `torch.compile` is opt-in because graph breaks, recompilation, compile overhead, or unsupported kernels can make it slower.
 
-## 5. Current likely bottleneck: LSConv
+## 5. Block AttnRes aggregation
+
+AttnRes normalizes the recent source states, stacks them, and reduces them in one tensor operation rather than launching a separate weighted addition for every source. This reduces small-op launch overhead at the cost of a temporary stacked tensor; benchmark at target sequence lengths.
+
+## 6. Current likely bottleneck: LSConv
 
 The portable reference LSConv uses `unfold`, which materializes local patches and can consume substantial memory at high resolutions. It is intended as a correctness/reference implementation, not the final high-throughput kernel. The next optimization should replace Small Kernel Aggregation with a fused Triton/CUDA kernel and compare output and gradients to this reference across shapes and dtypes. Do not make that optional dependency mandatory for CPU CI.
 
