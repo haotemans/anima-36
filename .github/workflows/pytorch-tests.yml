@@ -22,6 +22,8 @@ jobs:
       - name: Install CPU PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install project and test tools
-        run: pip install -e . --no-deps pytest
+        run: pip install -e . --no-deps
+      - name: Install test runner
+        run: pip install pytest
       - name: Run test suite
         run: pytest -q
