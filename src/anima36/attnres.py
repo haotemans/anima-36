@@ -26,5 +26,8 @@ class BlockAttnRes(nn.Module):
         if any(s.shape != x.shape for s in sources):
             raise ValueError("all AttnRes source states must match x shape")
         logits = self.source_logits[-len(sources):].softmax(dim=0)
-        aggregate = sum(weight * self.norm(state) for weight, state in zip(logits, sources))
+        # Stack once and reduce in one tensor op instead of launching one weighted
+        # elementwise op per source. This trades a small temporary for fewer launches.
+        normalized = torch.stack([self.norm(state) for state in sources], dim=0)
+        aggregate = (normalized * logits.view(-1, 1, 1, 1)).sum(dim=0)
         return x + torch.sigmoid(self.gate) * self.proj(aggregate)
