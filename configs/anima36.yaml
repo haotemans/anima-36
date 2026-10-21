@@ -8,9 +8,9 @@ model:
   patch_size: 2
 
 attention:
-  schedule: "3_ls_linear_then_1_standard"
-  ls_linear_blocks: 27
-  standard_blocks: 9
+  schedule: "alternating_ls_linear_standard"
+  ls_linear_blocks: 18
+  standard_blocks: 18
   qk_rms_norm: true
   rope: true  # Axial 2D RoPE is active in standard self-attention.
   ls_linear_position: "2d_sincos_input"  # Preserve positive-feature kernel formulation.
