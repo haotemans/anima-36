@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from .block import Anima36Block
-from .schedule import build_attention_schedule
+
 
 def timestep_embedding(t: torch.Tensor, dim: int, max_period: int = 10000):
     half = dim // 2
@@ -16,25 +16,29 @@ def timestep_embedding(t: torch.Tensor, dim: int, max_period: int = 10000):
         emb = torch.nn.functional.pad(emb, (0, 1))
     return emb
 
-class Anima36Core(nn.Module):
-    """Latent-in/latent-out transformer with 2x patching and text cross-attention.
 
-    Defaults express the intended large configuration and require substantial accelerator
-    memory. VAE conventions and pipeline integration remain external responsibilities.
+class Anima36Core(nn.Module):
+    """Latent-in/latent-out transformer with identical hybrid blocks.
+
+    Each block fuses positive-feature linear attention with an LSNet local branch,
+    then injects text using cross-attention. VAE conventions and pipeline integration
+    remain external responsibilities.
     """
     def __init__(self, latent_channels: int = 16, dim: int = 2048,
                  depth: int = 36, num_heads: int = 16, context_dim: int = 2048,
                  patch_size: int = 2, ffn_dim: int | None = None, kv_stride: int = 2,
                  gradient_checkpointing: bool = False):
         super().__init__()
-        if depth <= 0 or depth % 2:
-            raise ValueError("depth must be a positive even number")
+        if depth <= 0:
+            raise ValueError("depth must be a positive integer")
         if dim % num_heads:
             raise ValueError("dim must be divisible by num_heads")
+        if patch_size < 1:
+            raise ValueError("patch_size must be positive")
         self.latent_channels, self.dim, self.depth = latent_channels, dim, depth
         self.patch_size = patch_size
         self.gradient_checkpointing = gradient_checkpointing
-        self.schedule = build_attention_schedule(depth)
+        self.block_type = "hybrid_linear_attention_lsnet"
         self.patch_embed = nn.Conv2d(latent_channels, dim, kernel_size=patch_size, stride=patch_size)
         self.time_mlp = nn.Sequential(nn.Linear(dim, dim * 4), nn.SiLU(), nn.Linear(dim * 4, dim))
         self.blocks = nn.ModuleList([
@@ -47,6 +51,16 @@ class Anima36Core(nn.Module):
 
     def forward(self, latents: torch.Tensor, timesteps: torch.Tensor,
                 text_context: torch.Tensor, text_mask: torch.Tensor | None = None):
+        if latents.ndim != 4 or latents.shape[1] != self.latent_channels:
+            raise ValueError("latents must have shape [batch, latent_channels, height, width]")
+        if text_context.ndim != 3 or text_context.shape[0] != latents.shape[0]:
+            raise ValueError("text_context must have shape [batch, text_tokens, context_dim]")
+        if text_context.shape[-1] != self.blocks[0].text_attn.kv.in_features:
+            raise ValueError("text_context last dimension must match context_dim")
+        if timesteps.numel() != latents.shape[0]:
+            raise ValueError("timesteps must contain one value per batch item")
+        if text_mask is not None and text_mask.shape != text_context.shape[:2]:
+            raise ValueError("text_mask must have shape [batch, text_tokens]")
         b, _, h, w = latents.shape
         p = self.patch_size
         if h % p or w % p:
@@ -54,13 +68,11 @@ class Anima36Core(nn.Module):
         image = self.patch_embed(latents)
         gh, gw = image.shape[-2:]
         x = image.flatten(2).transpose(1, 2)
+        # Encode the scalar timestep once; every block derives its own AdaLN parameters.
         time_cond = self.time_mlp(timestep_embedding(timesteps, self.dim).to(latents.dtype))
         prior_states = []
         for block in self.blocks:
             if self.training and self.gradient_checkpointing and torch.is_grad_enabled():
-                # Snapshot only the recent states consumed by BlockAttnRes. Passing
-                # the growing mutable list into checkpoint can make backward
-                # recomputation observe later blocks' states.
                 prior_snapshot = tuple(prior_states[-block.attnres.max_sources:])
                 x = checkpoint(block, x, time_cond, text_context, text_mask,
                                (gh, gw), prior_snapshot, use_reentrant=False)
