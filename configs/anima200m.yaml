@@ -3,7 +3,7 @@
 model:
   name: anima200m_pixel_art
   target_parameters: 200000000
-  expected_parameters_approx: 196950000
+  expected_parameters_approx: 196956420
   depth: 14
   hidden_size: 640
   num_heads: 10
