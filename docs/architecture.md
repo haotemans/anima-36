@@ -5,8 +5,9 @@ This document specifies the target design, not a claim that a runnable model exi
 
 ## Topology
 - 36 blocks; hidden size 2048 and 16 heads (head dimension 128) are initial assumptions.
-- Blocks 1–3 LS-Linear, block 4 Standard; repeat every four blocks through block 36.
-- Total: 27 LS-Linear blocks and 9 Standard blocks.
+- Alternate LS-Linear and Standard Self-Attention throughout the network.
+- Total: 18 LS-Linear blocks and 18 Standard blocks.
+- Rationale: distribute global token mixing across the full depth instead of placing it only once every four blocks. This is a testable hypothesis, not a proven quality improvement; compare against the previous 27/9 schedule under matched training conditions.
 
 ## LS-Linear contract
 1. Preserve image token grid metadata for reshape to/from `[B, C, H, W]`.
