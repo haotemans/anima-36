@@ -9,6 +9,14 @@ This document specifies the target design, not a claim that a runnable model exi
 - Total: 18 LS-Linear blocks and 18 Standard blocks.
 - Rationale: distribute global token mixing across the full depth instead of placing it only once every four blocks. This is a testable hypothesis, not a proven quality improvement; compare against the previous 27/9 schedule under matched training conditions.
 
+## Local-detail and global-context split
+
+- In LS-Linear blocks, LSConv produces a local feature delta in parallel with the positive-feature linear-attention path. A learned scalar gate (initialized to 0.1) controls the projected local delta added to the attention output.
+- Standard blocks use full-resolution softmax self-attention with axial 2D RoPE to model global token interactions.
+- Every block retains its separate text cross-attention path; text tokens are not passed through image LSConv.
+- This split is an architectural hypothesis: LSConv may improve local texture/edge modeling, while full attention provides unrestricted token-to-token interaction. Neither quality benefit is guaranteed without matched ablations.
+- Required tests: local branch forward/backward, finite gate/weight gradients, different grid aspect ratios, and 18/18 vs 27/9 quality/throughput comparisons.
+
 ## LS-Linear contract
 1. Preserve image token grid metadata for reshape to/from `[B, C, H, W]`.
 2. Apply pre-norm and timestep/AdaLN-style conditioning.
