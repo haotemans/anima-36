@@ -22,8 +22,8 @@ jobs:
       - name: Install CPU PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install project and test tools
-        run: pip install -e . --no-deps
-      - name: Install test runner
-        run: pip install pytest
+        run: pip install -e . pytest
+      - name: Count configured 200M model parameters
+        run: python scripts/count_parameters.py --config configs/anima200m.yaml
       - name: Run test suite
         run: pytest -q
