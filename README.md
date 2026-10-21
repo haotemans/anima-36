@@ -19,7 +19,7 @@ Experimental PyTorch diffusion-transformer prototype targeting integration with 
 - `scripts/count_parameters.py --config configs/anima200m.yaml`: instantiate the actual module definitions and print the measured parameter count.
 - `scripts/build_danbooru_pixel_art_manifest.py`: filter local CSV/JSONL metadata to exact `pixel_art` tag matches, deduplicate local files, and create a stable train/validation manifest. It does not download images or resize them.
 
-The Qwen-Image VAE is a candidate, not yet an integration-verified drop-in replacement. Validate its 16-channel latents, spatial scale, per-channel mean/std normalization, encode/decode behavior, and text-conditioning interface against a pinned Diffusers revision before training.
+The selected VAE target is `Qwen/Qwen-Image-2.1` (`AutoencoderKLQwenImage21`): its published config specifies 64 latent channels and 16x spatial compression. It is not yet integration-verified; validate its 64-channel per-channel mean/std normalization, encode/decode behavior, and text-conditioning interface against a pinned Diffusers revision before training.
 
 ## Layout
 
