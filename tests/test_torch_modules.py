@@ -31,6 +31,18 @@ def test_lsconv_forward_backward():
     y.mean().backward()
     assert x.grad is not None and torch.isfinite(x.grad).all()
 
+def test_lslinear_local_branch_gradients():
+    module = LSLinearAttention(32, num_heads=4, kv_stride=2)
+    x = torch.randn(2, 16, 32, requires_grad=True)
+    y = module(x, (4, 4))
+    assert y.shape == x.shape and torch.isfinite(y).all()
+    y.square().mean().backward()
+    assert module.local_out.weight.grad is not None
+    assert torch.isfinite(module.local_out.weight.grad).all()
+    assert module.local_gate.grad is not None
+    assert torch.isfinite(module.local_gate.grad)
+
+
 def test_attention_shapes_and_gradients():
     x = torch.randn(2, 16, 32, requires_grad=True)
     linear = LSLinearAttention(32, num_heads=4, kv_stride=2)
