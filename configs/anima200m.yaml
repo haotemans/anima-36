@@ -3,12 +3,12 @@
 model:
   name: anima200m_pixel_art
   target_parameters: 200000000
-  expected_parameters_approx: 196956420
+  expected_parameters_approx: 197202180
   depth: 14
   hidden_size: 640
   num_heads: 10
   head_dim: 64
-  latent_channels: 16
+  latent_channels: 64
   patch_size: 2
   ffn_hidden_size: 2560
   kv_stride: 2
@@ -60,14 +60,14 @@ text:
   note: "Do not feed unverified native text features directly; validate encoder API, hidden-state width, mask polarity, and sequence length."
 
 vae:
-  model_id: "Qwen/Qwen-Image"
+  model_id: "Qwen/Qwen-Image-2.1"
   config_path: "vae/config.json"
-  expected_latent_channels: 16
-  expected_spatial_downsample: 8
+  expected_latent_channels: 64
+  expected_spatial_downsample: 16
   latent_normalization: "per-channel (latent - latents_mean) / latents_std"
   resolution: [512, 512]
-  compatibility_status: "candidate; runtime encode/decode parity test required"
-  note: "Qwen-Image uses a model-specific VAE and per-channel latent statistics. Do not substitute a scalar scaling_factor without checking the exact pipeline revision."
+  compatibility_status: "Qwen-Image-2.1-specific VAE; runtime encode/decode parity test required"
+  note: "Qwen-Image-2.1 VAE has z_dim=64 and scale_factor_spatial=16. Use its 64-channel latents_mean/latents_std from the pinned VAE config; do not reuse the older Qwen-Image VAE conventions."
 
 dataset:
   name: "Danbooru Pixel Art"
