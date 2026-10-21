@@ -14,9 +14,9 @@ A roughly 200M-parameter, 512x512 text-to-image research experiment trained on l
 
 ## Qwen-Image-2.1 VAE compatibility gate
 
-The candidate is `Qwen/Qwen-Image`, specifically its `vae/config.json`. The public config identifies `AutoencoderKLQwenImage` and `z_dim=16`; the config also carries 16-channel `latents_mean` and `latents_std`. The Qwen-Image pipeline uses a VAE spatial scale of 8 and then a 2x2 latent patch packing convention. For this repository's convolutional patch embed, 512x512 RGB images should therefore yield a 16x64x64 latent tensor and a 32x32 transformer token grid if the selected VAE implementation matches that pipeline revision.
+The selected candidate is `Qwen/Qwen-Image-2.1`, specifically its `vae/config.json`. The published config identifies `AutoencoderKLQwenImage21`, `z_dim=64`, and `scale_factor_spatial=16`, with 64-element `latents_mean` and `latents_std` arrays. For this repository's convolutional patch embed, a 512x512 image should therefore yield a 64x32x32 latent tensor and a 16x16 transformer token grid if the pinned Diffusers implementation matches the published VAE config. See the [official Qwen-Image-2.1 VAE config](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/vae/config.json).
 
-**Not yet proven compatible.** Before training, run an integration test against the exact Diffusers/Qwen-Image revision and verify:
+**Not yet proven compatible.** Before training, run an integration test against the exact Diffusers/Qwen-Image-2.1 revision and verify:
 1. encode/decode input and output shapes for 512x512 images;
 2. the latent distribution choice (sample vs mode);
 3. per-channel normalization using the VAE config's means and standard deviations;
