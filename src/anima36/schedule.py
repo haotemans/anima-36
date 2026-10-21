@@ -1,13 +1,18 @@
-"""Deterministic attention schedule."""
+"""Balanced, interleaved attention schedule for Anima-36."""
 from typing import List, Literal
+
 AttentionKind = Literal["ls_linear", "standard"]
 
 def build_attention_schedule(depth: int = 36) -> List[AttentionKind]:
-    """Three LS-Linear blocks followed by one Standard block per group."""
-    if depth <= 0 or depth % 4:
-        raise ValueError("depth must be a positive multiple of four")
-    return [kind for _ in range(depth // 4)
-            for kind in ("ls_linear", "ls_linear", "ls_linear", "standard")]
+    """Alternate LS-Linear and Standard attention for a 1:1 schedule.
+
+    Even depths produce equal counts. Interleaving keeps global attention
+    available throughout the network rather than concentrating it in one stage.
+    """
+    if depth <= 0 or depth % 2:
+        raise ValueError("depth must be a positive even number")
+    return [kind for _ in range(depth // 2)
+            for kind in ("ls_linear", "standard")]
 
 def attention_kind(block_index: int, depth: int = 36) -> AttentionKind:
     schedule = build_attention_schedule(depth)
