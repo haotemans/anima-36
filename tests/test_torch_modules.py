@@ -5,22 +5,17 @@ from anima36.ffn import SwiGLU
 from anima36.lsconv import LSConv
 from anima36.ska_triton import triton_ska, triton_ska_available
 from anima36.model import Anima36Core
-from anima36.schedule import build_attention_schedule
-from anima36.positional import apply_axial_2d_rope, sinusoidal_2d_embedding
 from anima36.positional import apply_axial_2d_rope, sinusoidal_2d_embedding
 from anima36.optim import make_adamw
 from anima36.text_conditioning import LayerwiseTextProjector, stage_features_for_block
 
-def test_balanced_attention_schedule():
-    schedule = build_attention_schedule(36)
-    assert len(schedule) == 36
-    assert schedule.count("ls_linear") == 18
-    assert schedule.count("standard") == 18
-    assert schedule[0::2] == ["ls_linear"] * 18
-    assert schedule[1::2] == ["standard"] * 18
-    assert build_attention_schedule(4) == [
-        "ls_linear", "standard", "ls_linear", "standard"
-    ]
+def test_all_model_blocks_use_hybrid_attention():
+    model = Anima36Core(latent_channels=4, dim=32, depth=5, num_heads=4,
+                        context_dim=24, patch_size=2, ffn_dim=64, kv_stride=2)
+    assert len(model.blocks) == 5
+    assert model.block_type == "hybrid_linear_attention_lsnet"
+    assert all(block.kind == "hybrid_linear_lsnet" for block in model.blocks)
+    assert all(isinstance(block.attn, LSLinearAttention) for block in model.blocks)
 
 
 def test_lsconv_forward_backward():
