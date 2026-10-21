@@ -9,10 +9,10 @@ A roughly 200M-parameter, 512x512 text-to-image research experiment trained on l
 - 14 identical hybrid blocks, width 640, 10 heads (64 dimensions per head).
 - Each block: positive-feature Linear Attention + LSNet-style local branch, separate text cross-attention, SwiGLU FFN, and the repository's experimental AttnRes.
 - The timestep embedding is computed once; each block predicts independent shift/scale/residual-gate values for its three sublayers.
-- 16 latent channels, patch size 2, FFN hidden width 2560, text-context projection width 1024.
-- Parameter budget estimate: about 197M parameters under the current module definitions. This is a formula-based estimate, not yet a measured instantiation count. Run `python scripts/count_parameters.py --config configs/anima200m.yaml` before training and adjust depth/width if module definitions have changed.
+- 64 latent channels, patch size 2, FFN hidden width 2560, text-context projection width 1024.
+- Parameter budget estimate: about 197.2M parameters under the current module definitions with 64-channel Qwen-Image-2.1 latents. This is a formula-based estimate, not yet a measured instantiation count. Run `python scripts/count_parameters.py --config configs/anima200m.yaml` before training and adjust depth/width if module definitions have changed.
 
-## Qwen-Image VAE compatibility gate
+## Qwen-Image-2.1 VAE compatibility gate
 
 The candidate is `Qwen/Qwen-Image`, specifically its `vae/config.json`. The public config identifies `AutoencoderKLQwenImage` and `z_dim=16`; the config also carries 16-channel `latents_mean` and `latents_std`. The Qwen-Image pipeline uses a VAE spatial scale of 8 and then a 2x2 latent patch packing convention. For this repository's convolutional patch embed, 512x512 RGB images should therefore yield a 16x64x64 latent tensor and a 32x32 transformer token grid if the selected VAE implementation matches that pipeline revision.
 
@@ -24,7 +24,7 @@ The candidate is `Qwen/Qwen-Image`, specifically its `vae/config.json`. The publ
 5. text encoder feature width, mask convention, and projection to 1024;
 6. the training scheduler's target convention. The `flow` value in YAML is provisional, not a guarantee that a generic scheduler can be used with this VAE.
 
-Do not treat the fact that both systems use 16 latent channels as sufficient compatibility evidence. Qwen-Image is not automatically a drop-in VAE for a DiffSynth-Studio Anima checkpoint.
+Do not treat matching tensor dimensions as sufficient compatibility evidence. Qwen-Image-2.1 is not automatically a drop-in VAE for a DiffSynth-Studio Anima checkpoint.
 
 ## Dataset policy and manifest
 
@@ -49,7 +49,7 @@ Input fields accepted by the builder: `id` or `post_id`; `file_path` or `path`; 
 ## First acceptance gates
 
 1. Instantiate the configured model and record the actual parameter count.
-2. Run unit tests and forward/backward smoke tests at a 32x32 token grid.
+2. Run unit tests and forward/backward smoke tests at a 16x16 token grid.
 3. Verify all 14 blocks use the hybrid operator.
 4. Run the exact VAE and text-encoder integration tests above.
 5. Overfit a small, rights-cleared subset before a longer run.
