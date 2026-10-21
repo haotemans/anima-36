@@ -27,8 +27,8 @@ class Anima36Core(nn.Module):
                  patch_size: int = 2, ffn_dim: int | None = None, kv_stride: int = 2,
                  gradient_checkpointing: bool = False):
         super().__init__()
-        if depth % 4:
-            raise ValueError("depth must be a positive multiple of four")
+        if depth <= 0 or depth % 2:
+            raise ValueError("depth must be a positive even number")
         if dim % num_heads:
             raise ValueError("dim must be divisible by num_heads")
         self.latent_channels, self.dim, self.depth = latent_channels, dim, depth
