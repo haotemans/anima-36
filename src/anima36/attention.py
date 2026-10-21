@@ -41,7 +41,11 @@ class LSLinearAttention(nn.Module):
         self.head_dim, self.kv_stride, self.eps = dim // num_heads, kv_stride, eps
         self.qkv = nn.Linear(dim, dim * 3)
         self.q_norm, self.k_norm = RMSNorm(self.head_dim, eps), RMSNorm(self.head_dim, eps)
+        # Keep LSNet-style local aggregation as an explicit parallel residual path,
+        # rather than forcing all local information through pooled linear-attention K/V.
         self.local = LSConv(dim, groups=lsconv_groups)
+        self.local_out = nn.Linear(dim, dim)
+        self.local_gate = nn.Parameter(torch.tensor(0.1))
         self.out = nn.Linear(dim, dim)
 
     def forward(self, x: torch.Tensor, grid_size: tuple[int, int]) -> torch.Tensor:
@@ -50,12 +54,12 @@ class LSLinearAttention(nn.Module):
         if h * w != n or d != self.dim:
             raise ValueError("grid_size must match token count and configured dim")
         image = x.transpose(1, 2).reshape(b, d, h, w)
-        image = self.local(image)
-        tokens = image.flatten(2).transpose(1, 2)
+        local_delta = self.local(image) - image
+        local_tokens = local_delta.flatten(2).transpose(1, 2)
         # Positive-feature linear attention cannot safely rotate the mapped Q/K
         # features. Inject deterministic 2D coordinates before their projections.
-        tokens = tokens + sinusoidal_2d_embedding(
-            grid_size, d, tokens.device, tokens.dtype
+        tokens = x + sinusoidal_2d_embedding(
+            grid_size, d, x.device, x.dtype
         )
         q, k, v = self.qkv(tokens).chunk(3, dim=-1)
         q = q.reshape(b, n, self.num_heads, self.head_dim)
@@ -76,7 +80,9 @@ class LSLinearAttention(nn.Module):
         numerator = torch.einsum("bhnd,bhde->bhne", q, kv)
         denominator = torch.einsum("bhnd,bhd->bhn", q, k_sum).unsqueeze(-1).clamp_min(self.eps)
         y = (numerator / denominator).transpose(1, 2).reshape(b, n, d).to(x.dtype)
-        return self.out(y)
+        global_delta = self.out(y)
+        local_delta = self.local_out(local_tokens)
+        return global_delta + self.local_gate.to(x.dtype) * local_delta
 
 class StandardSelfAttention(nn.Module):
     """Standard full-resolution scaled dot-product self-attention."""
