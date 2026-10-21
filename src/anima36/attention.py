@@ -11,11 +11,7 @@ except ImportError:  # Compatibility with older supported PyTorch builds.
 
 
 def _scaled_dot_product_attention(q, k, v, attn_mask=None):
-    """Prefer FlashAttention, while retaining compatible SDPA fallbacks.
-
-    PyTorch dispatches to FlashAttention only when device, dtype, shape, and
-    mask constraints permit it; otherwise efficient attention or math is used.
-    """
+    """Use PyTorch's best supported SDPA backend, with compatible fallbacks."""
     if sdpa_kernel is None or SDPBackend is None:
         return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
     with sdpa_kernel([
@@ -24,12 +20,21 @@ def _scaled_dot_product_attention(q, k, v, attn_mask=None):
         SDPBackend.MATH,
     ]):
         return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+
+
 from .lsconv import LSConv
 from .norm import RMSNorm
-from .positional import apply_axial_2d_rope, sinusoidal_2d_embedding
+from .positional import sinusoidal_2d_embedding
+
 
 class LSLinearAttention(nn.Module):
-    """Full-resolution Q, spatially pooled K/V, positive-feature linear attention."""
+    """Hybrid block-internal attention: global positive-feature linear attention + local LSNet.
+
+    Both branches consume the same image-token input. The global path uses full-resolution
+    queries and optionally pooled keys/values; the local path returns an LSConv update
+    (LSConv output minus its built-in residual input). Their projected updates are fused
+    before the enclosing transformer block applies its timestep-conditioned residual gate.
+    """
     def __init__(self, dim: int, num_heads: int = 16, kv_stride: int = 2,
                  lsconv_groups: int = 8, eps: float = 1e-6):
         super().__init__()
@@ -41,8 +46,6 @@ class LSLinearAttention(nn.Module):
         self.head_dim, self.kv_stride, self.eps = dim // num_heads, kv_stride, eps
         self.qkv = nn.Linear(dim, dim * 3)
         self.q_norm, self.k_norm = RMSNorm(self.head_dim, eps), RMSNorm(self.head_dim, eps)
-        # Keep LSNet-style local aggregation as an explicit parallel residual path,
-        # rather than forcing all local information through pooled linear-attention K/V.
         self.local = LSConv(dim, groups=lsconv_groups)
         self.local_out = nn.Linear(dim, dim)
         self.local_gate = nn.Parameter(torch.tensor(0.1))
@@ -54,13 +57,11 @@ class LSLinearAttention(nn.Module):
         if h * w != n or d != self.dim:
             raise ValueError("grid_size must match token count and configured dim")
         image = x.transpose(1, 2).reshape(b, d, h, w)
+        # LSConv already includes an identity residual; subtract it to fuse only its update.
         local_delta = self.local(image) - image
         local_tokens = local_delta.flatten(2).transpose(1, 2)
-        # Positive-feature linear attention cannot safely rotate the mapped Q/K
-        # features. Inject deterministic 2D coordinates before their projections.
-        tokens = x + sinusoidal_2d_embedding(
-            grid_size, d, x.device, x.dtype
-        )
+        # Positive-feature linear attention cannot rotate Q/K after feature mapping.
+        tokens = x + sinusoidal_2d_embedding(grid_size, d, x.device, x.dtype)
         q, k, v = self.qkv(tokens).chunk(3, dim=-1)
         q = q.reshape(b, n, self.num_heads, self.head_dim)
         k = k.reshape(b, n, self.num_heads, self.head_dim)
@@ -84,8 +85,9 @@ class LSLinearAttention(nn.Module):
         local_delta = self.local_out(local_tokens)
         return global_delta + self.local_gate.to(x.dtype) * local_delta
 
+
 class StandardSelfAttention(nn.Module):
-    """Standard full-resolution scaled dot-product self-attention."""
+    """Standalone full-resolution scaled dot-product attention primitive (not used by model blocks)."""
     def __init__(self, dim: int, num_heads: int = 16):
         super().__init__()
         if dim % num_heads:
@@ -102,10 +104,12 @@ class StandardSelfAttention(nn.Module):
             raise ValueError("grid_size is required when 2D RoPE is enabled")
         q, k, v = self.qkv(x).reshape(b, n, 3, self.num_heads, self.head_dim).unbind(dim=2)
         q, k = self.q_norm(q), self.k_norm(k)
+        # Retained for primitive-level experiments only.
+        from .positional import apply_axial_2d_rope
         q, k = apply_axial_2d_rope(q, k, grid_size)
-        y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
-                                      v.transpose(1, 2))
+        y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2))
         return self.out(y.transpose(1, 2).reshape(b, n, d))
+
 
 class TextCrossAttention(nn.Module):
     """Image queries attend to separately encoded text tokens; text never enters LSConv."""
@@ -123,6 +127,8 @@ class TextCrossAttention(nn.Module):
     def forward(self, x: torch.Tensor, context: torch.Tensor,
                 context_mask: torch.Tensor | None = None) -> torch.Tensor:
         b, n, d = x.shape
+        if context.ndim != 3 or context.shape[0] != b:
+            raise ValueError("context must have shape [batch, text_tokens, context_dim]")
         m = context.shape[1]
         q = self.q(x).reshape(b, n, self.num_heads, self.head_dim)
         k, v = self.kv(context).reshape(b, m, 2, self.num_heads, self.head_dim).unbind(dim=2)
@@ -132,6 +138,6 @@ class TextCrossAttention(nn.Module):
             if context_mask.shape != (b, m):
                 raise ValueError("context_mask must have shape [batch, text_tokens]")
             mask = context_mask[:, None, None, :].to(torch.bool)
-        y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2),
-                                      v.transpose(1, 2), attn_mask=mask)
+        y = _scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                                          attn_mask=mask)
         return self.out(y.transpose(1, 2).reshape(b, n, d))
