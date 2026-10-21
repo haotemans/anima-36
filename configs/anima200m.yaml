@@ -1,0 +1,103 @@
+# ~200M-parameter Anima-inspired experiment.
+# Parameter budget assumes the repository's current Anima36Core implementation.
+model:
+  name: anima200m_pixel_art
+  target_parameters: 200000000
+  expected_parameters_approx: 196950000
+  depth: 14
+  hidden_size: 640
+  num_heads: 10
+  head_dim: 64
+  latent_channels: 16
+  patch_size: 2
+  ffn_hidden_size: 2560
+  kv_stride: 2
+  block_type: "hybrid_linear_attention_lsnet"
+  attnres_sources: 4
+  context_dim: 1024 # Adapter output width; not a claim that raw Qwen text features are 1024-D.
+  gradient_checkpointing: true
+
+attention:
+  type: "positive_feature_linear_attention"
+  qk_rms_norm: true
+  position: "2d_sincos_input"
+  kv_stride: 2
+  fusion: "projected_gated_sum"
+  local_branch_gate_init: 0.1
+  all_blocks_hybrid: true
+
+lsconv:
+  implementation: "portable_pytorch_lkp_ska_reference"
+  large_kernel_size: 7
+  small_kernel_size: 3
+  groups: 8
+  branch_output: "lsconv_output_minus_input"
+
+conditioning:
+  timestep_embedding: "sinusoidal_then_mlp_once_per_model"
+  per_block_adaln: ["hybrid_attention", "text_cross_attention", "swiglu_ffn"]
+  modulation_parameters_per_branch: ["shift", "scale", "residual_gate"]
+
+ffn:
+  type: "swiglu"
+  hidden_size: 2560
+  fused_gate_up_projection: true
+
+normalization:
+  type: "rmsnorm"
+  pre_norm: true
+
+attnres:
+  enabled: true
+  max_sources: 4
+  equation: "softmax learned weights over recent normalized states, projected and gated"
+
+text:
+  encoder_target: "Qwen-Image text-conditioning path (to be verified)"
+  context_dim_after_projection: 1024
+  projection_required: true
+  padding_mask_required: true
+  note: "Do not feed unverified native text features directly; validate encoder API, hidden-state width, mask polarity, and sequence length."
+
+vae:
+  model_id: "Qwen/Qwen-Image"
+  config_path: "vae/config.json"
+  expected_latent_channels: 16
+  expected_spatial_downsample: 8
+  latent_normalization: "per-channel (latent - latents_mean) / latents_std"
+  resolution: [512, 512]
+  compatibility_status: "candidate; runtime encode/decode parity test required"
+  note: "Qwen-Image uses a model-specific VAE and per-channel latent statistics. Do not substitute a scalar scaling_factor without checking the exact pipeline revision."
+
+dataset:
+  name: "Danbooru Pixel Art"
+  source: "locally acquired Danbooru metadata and image files"
+  required_tags: ["pixel_art"]
+  optional_quality_tags: ["pixel_background", "limited_palette", "pixelated"]
+  image_size: [512, 512]
+  aspect_ratio_policy: "resize with nearest-neighbor and pad to square; preserve source pixels"
+  allowed_ratings: ["s"]
+  deduplicate_by: ["post_id", "sha256"]
+  exclude_deleted_or_missing_files: true
+  split_seed: 20261021
+  train_fraction: 0.98
+  validation_fraction: 0.02
+  licensing: "Review Danbooru terms and each artwork's rights before training or redistribution; metadata availability does not grant image rights."
+
+training:
+  prediction_type: "flow"
+  prediction_type_status: "provisional; must match selected scheduler and training objective"
+  resolution: 512
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+  allow_tf32: true
+  torch_compile: "optional"
+  fused_adamw: "cuda_when_supported"
+  batch_size_per_device: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0001
+  warmup_steps: 500
+  max_train_steps: 20000
+  checkpoint_every_steps: 1000
+  seed: 20261021
+  note: "These are conservative starting values, not validated training recommendations. Determine scheduler, optimizer stability, and memory use in a short smoke run."
