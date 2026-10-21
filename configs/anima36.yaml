@@ -6,22 +6,28 @@ model:
   head_dim: 128
   latent_channels: null
   patch_size: 2
+  block_type: "hybrid_linear_attention_lsnet"
 
 attention:
-  schedule: "alternating_ls_linear_standard"
-  ls_linear_blocks: 18
-  standard_blocks: 18
+  type: "positive_feature_linear_attention"
   qk_rms_norm: true
-  rope: true  # Axial 2D RoPE is active in standard self-attention.
-  ls_linear_position: "2d_sincos_input"  # Preserve positive-feature kernel formulation.
-  local_global_design: "parallel_lsnet_local_branch_plus_linear_attention"
+  position: "2d_sincos_input"
+  kv_stride: 2
+  fusion: "projected_gated_sum"
   local_branch_gate_init: 0.1
+  all_blocks_hybrid: true
 
 lsconv:
   implementation: "portable_pytorch_lkp_ska_reference"
   large_kernel_size: 7
   small_kernel_size: 3
   groups: 8
+  branch_output: "lsconv_output_minus_input"
+
+conditioning:
+  timestep_embedding: "sinusoidal_then_mlp_once_per_model"
+  per_block_adaln: ["hybrid_attention", "text_cross_attention", "swiglu_ffn"]
+  modulation_parameters_per_branch: ["shift", "scale", "residual_gate"]
 
 ffn:
   type: swiglu
@@ -31,7 +37,6 @@ ffn:
 normalization:
   type: rmsnorm
   pre_norm: true
-  preserve_timestep_adaln: true
 
 attnres:
   enabled: true
