@@ -5,14 +5,14 @@ This document specifies the target design, not a claim that a runnable model exi
 
 ## Topology
 - 36 blocks; hidden size 2048 and 16 heads (head dimension 128) are initial assumptions.
-- Alternate LS-Linear and Standard Self-Attention throughout the network.
-- Total: 18 LS-Linear blocks and 18 Standard blocks.
-- Rationale: distribute global token mixing across the full depth instead of placing it only once every four blocks. This is a testable hypothesis, not a proven quality improvement; compare against the previous 27/9 schedule under matched training conditions.
+- Every block is the same hybrid: positive-feature Linear Attention in parallel with an LSNet local branch; there are no alternating full-softmax self-attention blocks.
+- Each hybrid branch sees the same timestep-modulated image tokens. The local branch computes `LSConv(image) - image` to remove LSConv's internal identity residual before projecting and fusing its update.
+- The global and local updates are fused inside the hybrid attention module; a learnable scalar local gate starts at 0.1. The enclosing block then applies a timestep-conditioned residual gate.
 
 ## Local-detail and global-context split
 
-- In LS-Linear blocks, LSConv produces a local feature delta in parallel with the positive-feature linear-attention path. A learned scalar gate (initialized to 0.1) controls the projected local delta added to the attention output.
-- Standard blocks use full-resolution softmax self-attention with axial 2D RoPE to model global token interactions.
+- In every block, LSConv produces a local feature delta in parallel with the positive-feature linear-attention path. A learned scalar gate (initialized to 0.1) controls the projected local delta added to the global update.
+- Positive-feature linear attention uses 2D sinusoidal token embeddings before Q/K/V projection and optional spatial K/V pooling. Full-softmax self-attention remains a standalone primitive for experiments and is not selected by the model.
 - Every block retains its separate text cross-attention path; text tokens are not passed through image LSConv.
 - This split is an architectural hypothesis: LSConv may improve local texture/edge modeling, while full attention provides unrestricted token-to-token interaction. Neither quality benefit is guaranteed without matched ablations.
 - Required tests: local branch forward/backward, finite gate/weight gradients, different grid aspect ratios, and 18/18 vs 27/9 quality/throughput comparisons.
@@ -28,9 +28,6 @@ This document specifies the target design, not a claim that a runnable model exi
 8. Fuse text through separate cross-attention; never send text tokens through image LSConv or image K/V compression.
 9. Apply RMSNorm + SwiGLU FFN.
 10. Apply explicitly defined Block AttnRes aggregation.
-
-## Standard block contract
-Use standard Softmax image self-attention, consistent RMSNorm/QK normalization, RoPE, timestep conditioning, dedicated text cross-attention, SwiGLU, and the shared Block AttnRes contract.
 
 ## Text conditioning
 - Target encoder: `Qwen/Qwen3.5-4B`.
@@ -64,8 +61,8 @@ This excludes LSConv, compressed K/V projections, cross-attention, AttnRes, inpu
 Inspect the exact target revision of `diffsynth/models/anima_dit.py`, `diffsynth/pipelines/anima_image.py`, model loading/registration, and `examples/anima/model_training/`. Keep modules isolated until interfaces are verified.
 
 ## Acceptance criteria
-- Exact 36-position attention schedule test.
-- Shape tests across supported resolutions and batch sizes.
+- Assert all model blocks use the same hybrid Linear Attention + LSNet operator (no alternating schedule).
+- Shape tests across supported resolutions and batch sizes, including non-square grids and odd positive depths.
 - LSConv output/gradient/dtype tests.
 - Attention finite-output/gradient and mask tests.
 - Text layer routing and padding-mask tests.
@@ -91,9 +88,11 @@ Upstream references (verify against a pinned commit before implementation):
 ### Dataflow implemented by this repository
 
 1. Input latents `[B, C_latent, H, W]` enter a stride-`patch_size` Conv2d and become `[B, N, D]`, where `N=(H/patch_size)(W/patch_size)`.
-2. A scalar timestep per batch item is converted to a sinusoidal embedding and projected to `[B,D]`.
-3. Each block applies timestep-modulated image self-attention, separate text cross-attention, an unmodulated pre-norm SwiGLU FFN, and learned aggregation from recent block outputs.
-4. Final timestep modulation and a transposed convolution map tokens back to `[B,C_latent,H,W]`.
+2. Each batch timestep is encoded once with sinusoidal features and an MLP to produce `T` with shape `[B,D]`.
+3. Every block's independent modulation MLP maps `T` to shift, scale, and residual-gate vectors for three sublayers: hybrid attention, text cross-attention, and SwiGLU FFN.
+4. Hybrid attention sends the same modulated image tokens through global linear attention and local LSNet; it fuses their projected updates before the outer residual add.
+5. The text sequence remains separate and is read by image queries through masked cross-attention; text is never fed into LSNet.
+6. Block AttnRes aggregates recent block outputs. Final timestep modulation and a transposed convolution map tokens back to `[B,C_latent,H,W]`.
 
 This describes the current code path, not the full diffusion system. Text encoding/tokenization, VAE encode/decode and latent scaling, noise/sigma schedule, target parameterization, loss, classifier-free guidance, sampler, checkpoint conversion, and an end-to-end pipeline are not implemented here.
 
@@ -102,7 +101,7 @@ This describes the current code path, not the full diffusion system. Text encodi
 - **Text routing is not connected.** `LayerwiseTextProjector` and `stage_features_for_block` are standalone utilities. `Anima36Core.forward` accepts one `text_context` tensor and passes the same context to every block; it does not select shallow/middle/deep hidden states per block. The current staged-routing claim is therefore a design intention, not implemented behavior.
 - **Position information is missing.** The config explicitly sets `rope: false`, and neither standard attention nor LS-Linear attention applies RoPE or another explicit spatial position embedding. LSConv provides local inductive bias but does not replace a complete positional encoding contract for global attention. This is a blocker for target-model parity and a major risk for spatial composition.
 - **LS-Linear positional semantics are undefined.** K/V are average-pooled spatially, then used in positive-feature linear attention. The code does not define a positional encoding treatment for compressed K or demonstrate that this operator preserves the required spatial relationships.
-- **Conditioning is inconsistent across sublayers.** Self-attention and text cross-attention receive timestep modulation; the FFN only receives RMSNorm and has no timestep modulation. This may be a valid custom design, but it differs from the stated target block contract and needs an explicit decision.
+- **Timestep modulation is now explicit across all block sublayers.** The same model-level timestep embedding is reused, while each block generates its own AdaLN-style shift/scale/residual-gate parameters for hybrid attention, text cross-attention, and FFN. This is a design choice that still requires numerical and training validation.
 - **Latent contract is unknown.** The config leaves latent channels, spatial scale, scaling factor, and shift factor null. The model defaults to 16 channels, but a default is not proof that the selected VAE emits compatible latents.
 - **Text encoder contract is unknown.** The code assumes one `context_dim` and one mask. Qwen3.5-4B hidden-state indices, feature dimensions, tokenizer behavior, model output API, and license have not been verified; a separate T5 path in upstream Anima is not represented.
 - **Training objective and sampler are absent.** Without a specified noise/sigma schedule, prediction target (epsilon, velocity, or flow), loss weighting, and matching sampler, a forward pass alone cannot establish diffusion-model feasibility.
